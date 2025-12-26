@@ -1,18 +1,19 @@
-name: Build
+name: Build Xiaomi BE7000
 
 on:
   workflow_dispatch:
 
 env:
-  REPO_URL: https://github.com/Lvellios/openwrt-lede
-  REPO_BRANCH: master
+  # 更换为支持 Wi-Fi 7 (IPQ95xx) 的仓库
+  REPO_URL: https://github.com/Lvellios/OpenWrt-IPQ
+  REPO_BRANCH: main
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_SCRIPT: diy-part.sh
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
-  TZ: Canada/Atlantic
-  FILE_NAME: IPQ60xx
+  TZ: Asia/Shanghai
+  FILE_NAME: Xiaomi_BE7000
 
 jobs:
   build:
@@ -26,26 +27,18 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        docker rmi $(docker images -q)
-        [[ -n "${AGENT_TOOLSDIRECTORY}" ]] && sudo rm -rf "${AGENT_TOOLSDIRECTORY}"
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /etc/mysql /etc/php /opt/ghc /usr/local/lib/android 2>/dev/null
-        sudo -E apt-get -y purge azure-cli ghc* zulu* hhvm llvm* firefox google* dotnet* powershell openjdk* adoptopenjdk* mysql* php* mongodb* dotnet* moby* snapd* || true
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo -E apt-get -y update
-        sudo -E apt-get -y install $(curl -fsSL is.gd/depends_ubuntu_2204)
-        sudo -E apt-get -y install rename
-        sudo -E apt-get -y install time
-        sudo -E apt-get -y install gn
-        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get -y install $(curl -fsSL https://is.gd/depends_ubuntu_2204)
+        sudo -E apt-get -y install rename time gn
         sudo -E apt-get clean
         sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
-        df -Th
 
-    - name: CGit Repository
+    - name: Clone Source Code
       working-directory: /workdir
       run: |
-        df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
@@ -57,46 +50,31 @@ jobs:
 
     - name: Custom Config
       run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
         chmod +x $DIY_SCRIPT
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_SCRIPT
+        # 核心：补全并修正配置
+        make defconfig
 
     - name: Download DL
-      id: package
       run: |
         cd openwrt
-        make defconfig
         make download -j8
-        find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: Compile Packages
+    - name: Compile Firmware
       id: compile
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        # 首次编译 IPQ 平台，如果报错会自动转为单线程输出日志
+        make -j$(nproc) || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-
-    - name: Check Space Usage
-      if: (!cancelled())
-      run: df -hT
-
-#    - name: Upload Bin Directory
-#      uses: actions/upload-artifact@main
-#      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-#      with:
-#        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-#        path: openwrt/bin
 
     - name: Organize Files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: steps.compile.outputs.status == 'success' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
@@ -107,24 +85,20 @@ jobs:
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        name: ${{ env.FILE_NAME }}_${{ github.run_id }}
         path: ${{ env.FIRMWARE }}
 
-    - name: Push Tag
-      id: tag
-      run: |
-        echo "release_tag=$(date +"%Y%m%d%H%M")" >> $GITHUB_OUTPUT
-
-    - name: Upload Files
+    - name: Create Release
       id: release
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
       uses: ncipollo/release-action@v1
       with:
-        name: ${{ env.FILE_NAME }}
+        name: Xiaomi Router BE7000 Firmware
         allowUpdates: true
-        tag: ${{ steps.tag.outputs.release_tag }}
+        tag: ${{ env.FILE_NAME }}_${{ github.run_id }}
         commit: main
-        token: ${{ secrets.RELEASES_TOKEN }}
+        # 核心修复：使用 GitHub 默认生成的 Token，无需手动设置
+        token: ${{ secrets.GITHUB_TOKEN }}
         body: |
-          The firmware for IPQ60xx
-          ${{ env.useVersionInfo }}
+          Xiaomi BE7000 (IPQ9554) Wi-Fi 7 Firmware
         artifacts: ${{ env.FIRMWARE }}/*
