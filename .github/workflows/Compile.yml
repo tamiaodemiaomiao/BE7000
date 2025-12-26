@@ -4,8 +4,9 @@ on:
   workflow_dispatch:
 
 env:
-  # 更换为支持 Wi-Fi 7 (IPQ95xx) 的仓库
+  # 必须修改这里：正确的仓库地址
   REPO_URL: https://github.com/Lvellios/OpenWrt-IPQ
+  # 必须修改这里：该仓库的主分支是 main 而不是 master
   REPO_BRANCH: main
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
