@@ -4,44 +4,35 @@ on:
   workflow_dispatch:
 
 env:
-  # 必须修改这里：正确的仓库地址
   REPO_URL: https://github.com/Lvellios/OpenWrt-IPQ
-  # 必须修改这里：该仓库的主分支是 main 而不是 master
   REPO_BRANCH: main
-  FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_SCRIPT: diy-part.sh
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
-  FILE_NAME: Xiaomi_BE7000
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@main
+    - name: Checkout Custom Files
+      uses: actions/checkout@v4
 
-    - name: INIT Environment
+    - name: Initialization Environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
         sudo -E apt-get -y update
-        sudo -E apt-get -y install $(curl -fsSL https://is.gd/depends_ubuntu_2204)
-        sudo -E apt-get -y install rename time gn
+        # 手动安装所有编译必备依赖，不依赖不稳定的外部 url
+        sudo -E apt-get -y install build-essential clang flex bison g++ gawk gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev python3-distutils rsync unzip zlib1g-dev rename time gn python3-pyelftools
         sudo -E apt-get clean
         sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
 
     - name: Clone Source Code
-      working-directory: /workdir
       run: |
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        # 核心：直接克隆到当前目录下的 openwrt 文件夹
+        git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
 
     - name: Install Feeds
       run: |
@@ -49,13 +40,15 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    - name: Custom Config
+    - name: Load Custom Config
       run: |
+        # 将你仓库根目录的 .config 复制到源码目录
         [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
+        # 执行你的自定义脚本
         chmod +x $DIY_SCRIPT
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_SCRIPT
-        # 核心：补全并修正配置
+        # 让配置生效，补全 BE7000 的硬件配置
         make defconfig
 
     - name: Download DL
@@ -69,7 +62,7 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        # 首次编译 IPQ 平台，如果报错会自动转为单线程输出日志
+        # 首次编译建议使用单线程或者受控多线程，IPQ 平台很吃资源
         make -j$(nproc) || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
 
@@ -79,27 +72,12 @@ jobs:
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@main
+      uses: actions/upload-artifact@v4
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: ${{ env.FILE_NAME }}_${{ github.run_id }}
-        path: ${{ env.FIRMWARE }}
-
-    - name: Create Release
-      id: release
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
-      uses: ncipollo/release-action@v1
-      with:
-        name: Xiaomi Router BE7000 Firmware
-        allowUpdates: true
-        tag: ${{ env.FILE_NAME }}_${{ github.run_id }}
-        commit: main
-        # 核心修复：使用 GitHub 默认生成的 Token，无需手动设置
-        token: ${{ secrets.GITHUB_TOKEN }}
-        body: |
-          Xiaomi BE7000 (IPQ9554) Wi-Fi 7 Firmware
-        artifacts: ${{ env.FIRMWARE }}/*
+        name: Xiaomi_BE7000_Firmware
+        path: ${{ env.FIRMWARE_PATH }}
